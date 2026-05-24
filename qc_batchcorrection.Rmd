@@ -1,0 +1,90 @@
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(ggExtra)
+library(RColorBrewer)
+library(openxlsx)
+library(scales)
+library(harmony)
+library(zellkonverter)
+library(SingleCellExperiment)
+
+inputDir <- "C:/Users/gupta/OneDrive/Desktop/input/"
+outputDir <- "C:/Users/gupta/OneDrive/Desktop/output/"
+plotDir <- "C:/Users/gupta/OneDrive/Desktop/plots/"
+
+rds_files <- list.files(inputDir, pattern = "_seurat\\.rds$", full.names = TRUE)
+seurat_list <- lapply(rds_files, readRDS)
+names(seurat_list) <- gsub("_seurat\\.rds$", "", basename(rds_files))
+
+seurat_combined <- merge(seurat_list[[1]], y = seurat_list[-1], add.cell.ids = names(seurat_list))
+rm(seurat_list)
+gc()
+metadata <- read.csv("C:/Users/gupta/OneDrive/Desktop/GSE279086metadata - Sheet1.csv", stringsAsFactors = FALSE)
+condition_map <- setNames(metadata$Condition, metadata$Sample)
+seurat_combined@meta.data$Condition <- unname(condition_map[as.character(seurat_combined@meta.data$sample)])
+print(table(seurat_combined$Condition))
+saveRDS(seurat_combined, file = paste0(outputDir, "01_GSE279086_seurat_combined.rds"))
+
+dir.create("D:/scRNA/output", recursive = TRUE)
+dir.create("D:/scRNA/plots", recursive = TRUE)
+
+outputDir <- "D:/scRNA/output/"
+plotDir <- "D:/scRNA/plots/"
+
+saveRDS(seurat_combined, file = "D:/scRNA/output/01_GSE279086_seurat_combined.rds")
+
+gc()
+test <- readRDS("D:/scRNA/output/01_GSE279086_seurat_combined.rds")
+dim(test)
+
+rm(test)
+rm(seurat_combined)
+gc()
+seurat_combined <- readRDS("D:/scRNA/output/01_GSE279086_seurat_combined.rds")
+
+```{r qc_functions}
+filter_nFeatures <- function(seurat_obj, min_feat, max_feat) {
+  return(subset(seurat_obj, subset = nFeature_RNA > min_feat & nFeature_RNA < max_feat))
+}
+filter_mt <- function(seurat_obj, max_mt) {
+  return(subset(seurat_obj, subset = percent.mt < max_mt))
+}
+filter_rb <- function(seurat_obj, max_rb) {
+  return(subset(seurat_obj, subset = percent.rb < max_rb))
+}
+fil_nCounts <- function(seurat_obj, threshold_mahalanobis){
+  ncounts_data <- data.frame(nCount_RNA = seurat_obj@meta.data$nCount_RNA)
+  mahalanobis_dist <- mahalanobis(x = ncounts_data, center = mean(ncounts_data$nCount_RNA), cov = var(ncounts_data$nCount_RNA))
+  seurat_obj$mahal_dist_nCount <- mahalanobis_dist
+  mahal.fil <- qchisq(threshold_mahalanobis, df = 1)
+  cells_to_remove <- rownames(seurat_obj@meta.data)[seurat_obj$mahal_dist_nCount > mahal.fil]
+  subset(seurat_obj, cells = setdiff(colnames(seurat_obj), cells_to_remove))
+}
+
+seurat_filtered <- filter_nFeatures(seurat_combined, 200, 7000)
+seurat_filtered <- filter_mt(seurat_filtered, 20)
+seurat_filtered <- fil_nCounts(seurat_filtered, 0.95)
+seurat_filtered <- filter_rb(seurat_filtered, 20)
+
+print(dim(seurat_filtered))
+print(table(seurat_filtered$Condition))
+
+saveRDS(seurat_filtered, file = "D:/scRNA/output/02_GSE279086_seurat_qc_filtered.rds")
+```
+```{r normalize_cluster}
+rm(seurat_combined)
+gc()
+
+seurat_processed <- NormalizeData(seurat_filtered, normalization.method = "LogNormalize")
+seurat_processed <- FindVariableFeatures(seurat_processed, selection.method = "vst", nfeatures = 2500)
+seurat_processed <- ScaleData(seurat_processed)
+seurat_processed <- RunPCA(seurat_processed, npcs = 50)
+seurat_processed <- RunUMAP(seurat_processed, dims = 1:30)
+seurat_processed <- FindNeighbors(seurat_processed, dims = 1:30)
+seurat_processed <- FindClusters(seurat_processed, resolution = 0.8)
+
+saveRDS(seurat_processed, file = "D:/scRNA/output/03_GSE279086_seurat_pca_umap.rds")
+print(dim(seurat_processed))
+```
+print(dim(seurat_processed))
